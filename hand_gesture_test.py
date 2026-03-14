@@ -1,14 +1,12 @@
 import cv2
-import time
 import numpy as np
 import tensorflow as tf
-import os
 
-# Load the TFLite model and allocate tensors.
+# Load the TFLite model and allocate tensors
 interpreter = tf.lite.Interpreter(model_path="mobilenetv2_gesture_model.tflite")
 interpreter.allocate_tensors()
 
-# Get input and output tensor details.
+# Get input and output tensor details
 input_details = interpreter.get_input_details()
 output_details = interpreter.get_output_details()
 
@@ -17,45 +15,65 @@ input_shape = input_details[0]['shape']
 input_height = input_shape[1]
 input_width = input_shape[2]
 
-# Define the function to preprocess images for the TFLite model.
-def preprocess_image(image):
-    image = cv2.resize(image, (input_width, input_height))  # Resize to match the model's expected input size
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)  # Convert to RGB
-    image = image / 255.0  # Normalize pixel values
-    image = np.expand_dims(image, axis=0).astype(np.float32)  # Add batch dimension and convert to float32
-    return image
+print("Starting live video feed... Press 'q' to quit.")
 
-# Define the function to capture and process an image.
-def capture_and_predict():
-    # Access the webcam
-    cap = cv2.VideoCapture(0)
-    if not cap.isOpened():
-        print("Error: Could not open webcam.")
-        return
-    
-    ret, frame = cap.read()  # Capture a single frame
-    cap.release()  # Release the webcam
-    
-    if ret:
-        # Preprocess and run inference
-        preprocessed_image = preprocess_image(frame)
-        interpreter.set_tensor(input_details[0]['index'], preprocessed_image)
+# Access the webcam ONCE before the loop
+cap = cv2.VideoCapture(0)
+
+if not cap.isOpened():
+    print("Error: Could not open webcam.")
+    exit()
+
+try:
+    while True:
+        # Capture frame-by-frame continuously
+        ret, frame = cap.read()
+        if not ret:
+            print("Failed to grab frame.")
+            break
+        
+        # --- Preprocessing ---
+        # Resize to match the model's expected input size
+        resized_image = cv2.resize(frame, (input_width, input_height))
+        # Convert BGR (OpenCV default) to RGB
+        rgb_image = cv2.cvtColor(resized_image, cv2.COLOR_BGR2RGB)
+        # Normalize pixel values
+        normalized_image = rgb_image / 255.0
+        # Add batch dimension and convert to float32
+        input_tensor = np.expand_dims(normalized_image, axis=0).astype(np.float32)
+
+        # --- Inference ---
+        interpreter.set_tensor(input_details[0]['index'], input_tensor)
         interpreter.invoke()
         
         # Get the prediction result
-        prediction = interpreter.get_tensor(output_details[0]['index'])
-        class_label = 'on' if prediction[0][0] > 0.5 else 'off'
-        print(f"Predicted status: {class_label}")
+        prediction = interpreter.get_tensor(output_details[0]['index'])[0][0]
+        
+        # Determine label and text color
+        if prediction > 0.5:
+            class_label = "ON"
+            color = (0, 255, 0) # Green
+        else:
+            class_label = "OFF"
+            color = (0, 0, 255) # Red
 
-        # Save and delete the image (for demonstration, saved temporarily)
-        img_path = "temp_image.jpg"
-        cv2.imwrite(img_path, frame)
-        os.remove(img_path)  # Delete the image after processing
+        # --- Display ---
+        # Draw the text directly onto the live video frame
+        cv2.putText(frame, f"Status: {class_label} ({prediction:.2f})", 
+                    (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2, cv2.LINE_AA)
+        
+        # Show the live feed window
+        cv2.imshow('TFLite Hand Gesture Recognition', frame)
 
-# Loop to capture images every 5 seconds
-try:
-    while True:
-        capture_and_predict()
-        time.sleep(5)  # Wait for 5 seconds before capturing the next image
+        # Wait for 1 millisecond and check if 'q' was pressed to quit
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            print("Stopped by user.")
+            break
+
 except KeyboardInterrupt:
-    print("Stopped by user.")
+    print("Stopped by user via console.")
+
+finally:
+    # Always release the webcam and destroy windows when done
+    cap.release()
+    cv2.destroyAllWindows()
